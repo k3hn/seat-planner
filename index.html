@@ -8,6 +8,8 @@
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <style>
   :root{
     --bg: #E7E2D3;
@@ -409,7 +411,33 @@
 
 <script>
 (function(){
-  const STATE_KEY = 'seat-planner-state';
+  // ============================================================
+  // PASTE YOUR FIREBASE CONFIG HERE (from Firebase console ->
+  // Project settings -> Your apps -> Web app -> SDK setup snippet)
+  // ============================================================
+  const firebaseConfig = {
+    apiKey: "AIzaSyDlO8-hbUqq3MKj1cd8Gj4CjP3v4Mdd5hY",
+    authDomain: "seat-plan-d6f9d.firebaseapp.com",
+    projectId: "seat-plan-d6f9d",
+    storageBucket: "seat-plan-d6f9d.firebasestorage.app",
+    messagingSenderId: "573658298898",
+    appId: "1:573658298898:web:486012220c813d329d76cb",
+    measurementId: "G-L5KFRFNBHC"
+  };
+  // ============================================================
+
+  let db = null;
+  let docRef = null;
+  let firebaseReady = false;
+  try{
+    firebase.initializeApp(firebaseConfig);
+    db = firebase.firestore();
+    docRef = db.collection('seatPlanner').doc('state');
+    firebaseReady = true;
+  } catch(e){
+    console.error('Firebase failed to initialize. Did you paste your config?', e);
+  }
+
   let state = null; // { totalSeats, nextSeatNumber, guests: [...] }
   let scanning = false;
   let scanStream = null;
@@ -420,14 +448,20 @@
   }
 
   async function loadState(){
+    if(!firebaseReady){
+      state = defaultState();
+      return;
+    }
     try{
-      const res = await window.storage.get(STATE_KEY, true);
-      if(res && res.value){
-        state = JSON.parse(res.value);
+      const snap = await docRef.get();
+      if(snap.exists){
+        state = snap.data();
       } else {
         state = defaultState();
+        await docRef.set(state);
       }
     } catch(e){
+      console.error('Load failed', e);
       state = defaultState();
     }
     if(!state.guests) state.guests = [];
@@ -436,22 +470,19 @@
   }
 
   async function saveState(){
-    try{
-      const res = await window.storage.set(STATE_KEY, JSON.stringify(state), true);
-      if(!res){ console.error('Storage save returned null'); }
-    } catch(e){
-      console.error('Storage save failed', e);
-      throw e;
+    if(!firebaseReady){
+      throw new Error('Firebase is not configured yet.');
     }
+    await docRef.set(state);
   }
 
   // fresh copy right before a mutation, to minimize collision window with other devices
   async function refreshBeforeWrite(){
+    if(!firebaseReady) return;
     try{
-      const res = await window.storage.get(STATE_KEY, true);
-      if(res && res.value){
-        const fresh = JSON.parse(res.value);
-        // keep our in-progress edit's intent but sync counters/guests from server
+      const snap = await docRef.get();
+      if(snap.exists){
+        const fresh = snap.data();
         state.totalSeats = fresh.totalSeats;
         state.nextSeatNumber = fresh.nextSeatNumber;
         state.guests = fresh.guests || [];
@@ -752,6 +783,18 @@
 
   // ---------- init ----------
   (async function init(){
+    if(!firebaseReady || firebaseConfig.apiKey.indexOf('PASTE_YOUR') === 0){
+      const warn = document.createElement('div');
+      warn.className = 'card';
+      warn.style.borderColor = 'var(--stamp)';
+      warn.style.marginBottom = '18px';
+      warn.innerHTML = `<p style="font-family:'IBM Plex Mono',monospace; color:var(--stamp); margin:0; font-size:13px;">
+        Setup needed: open this file's code and paste your Firebase project config
+        near the top of the &lt;script&gt; tag, replacing the PASTE_YOUR_... placeholders.
+        Until then, registrations won't save.
+      </p>`;
+      document.querySelector('.wrap').insertBefore(warn, document.querySelector('.tabs'));
+    }
     await loadState();
     updateCapPill();
     document.getElementById('capacityInput').value = state.totalSeats;
