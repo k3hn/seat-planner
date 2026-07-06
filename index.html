@@ -365,6 +365,12 @@
       </div>
       <button class="btn" id="scanToggleBtn">Start camera</button>
       <div class="scan-status" id="scanStatus">Camera is off.</div>
+
+      <label for="manualCodeInput">Or enter code manually</label>
+      <div class="row-inline">
+        <div><input id="manualCodeInput" type="text" placeholder="EVT-XXXXXXXX" style="text-transform:uppercase;" /></div>
+        <button class="btn small" id="manualLookupBtn">Look up</button>
+      </div>
     </div>
     <div id="scanResultWrap"></div>
   </div>
@@ -416,13 +422,12 @@
   // Project settings -> Your apps -> Web app -> SDK setup snippet)
   // ============================================================
   const firebaseConfig = {
-    apiKey: "AIzaSyDlO8-hbUqq3MKj1cd8Gj4CjP3v4Mdd5hY",
-    authDomain: "seat-plan-d6f9d.firebaseapp.com",
-    projectId: "seat-plan-d6f9d",
-    storageBucket: "seat-plan-d6f9d.firebasestorage.app",
-    messagingSenderId: "573658298898",
-    appId: "1:573658298898:web:486012220c813d329d76cb",
-    measurementId: "G-L5KFRFNBHC"
+    apiKey: "PASTE_YOUR_API_KEY",
+    authDomain: "PASTE_YOUR_PROJECT.firebaseapp.com",
+    projectId: "PASTE_YOUR_PROJECT_ID",
+    storageBucket: "PASTE_YOUR_PROJECT.appspot.com",
+    messagingSenderId: "PASTE_YOUR_SENDER_ID",
+    appId: "PASTE_YOUR_APP_ID"
   };
   // ============================================================
 
@@ -615,8 +620,8 @@
     if(qrEl && window.QRCode){
       new QRCode(qrEl, {
         text: guest.code,
-        width: 96,
-        height: 96,
+        width: 160,
+        height: 160,
         colorDark: '#211D16',
         colorLight: '#FBF7EC'
       });
@@ -643,41 +648,81 @@
     if(scanning){ stopScanning(); } else { startScanning(); }
   });
 
+  document.getElementById('manualLookupBtn').addEventListener('click', () => {
+    const val = document.getElementById('manualCodeInput').value.trim().toUpperCase();
+    if(!val) return;
+    handleScanResult(val);
+  });
+  document.getElementById('manualCodeInput').addEventListener('keydown', (e) => {
+    if(e.key === 'Enter'){ document.getElementById('manualLookupBtn').click(); }
+  });
+
   async function startScanning(){
     const statusEl = document.getElementById('scanStatus');
     document.getElementById('scanResultWrap').innerHTML = '';
-    try{
-      scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-    } catch(e){
-      statusEl.textContent = 'Camera access denied or unavailable.';
+
+    if(!window.jsQR){
+      statusEl.textContent = 'Scanner library failed to load — check your internet connection, or use manual entry below.';
       return;
     }
-    const video = document.getElementById('scanVideo');
-    video.srcObject = scanStream;
-    await video.play();
-    scanning = true;
-    scanToggleBtn.textContent = 'Stop camera';
-    statusEl.textContent = 'Point the camera at a guest\'s QR code…';
+    if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+      statusEl.textContent = 'This browser does not support camera access here. Try Chrome/Safari, or use manual entry below.';
+      return;
+    }
+    if(!window.isSecureContext){
+      statusEl.textContent = 'Camera requires a secure (https://) page. Use manual entry below, or open this over https.';
+      return;
+    }
 
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
+    statusEl.textContent = 'Requesting camera permission…';
 
-    function tick(){
-      if(!scanning) return;
-      if(video.readyState === video.HAVE_ENOUGH_DATA){
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const code = window.jsQR ? jsQR(imageData.data, imageData.width, imageData.height) : null;
-        if(code && code.data){
-          handleScanResult(code.data.trim());
-          return;
+    try{
+      try{
+        scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } } });
+      } catch(e1){
+        // some laptops/devices have no rear camera — fall back to any camera
+        scanStream = await navigator.mediaDevices.getUserMedia({ video: true });
+      }
+
+      const video = document.getElementById('scanVideo');
+      video.srcObject = scanStream;
+      await video.play();
+
+      scanning = true;
+      scanToggleBtn.textContent = 'Stop camera';
+      statusEl.textContent = 'Point the camera at a guest\'s QR code…';
+
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      let frameCount = 0;
+
+      function tick(){
+        if(!scanning) return;
+        if(video.readyState === video.HAVE_ENOUGH_DATA && video.videoWidth > 0){
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          const result = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'attemptBoth' });
+          frameCount++;
+          if(result && result.data){
+            handleScanResult(result.data.trim());
+            return;
+          }
         }
+        scanRAF = requestAnimationFrame(tick);
       }
       scanRAF = requestAnimationFrame(tick);
+
+    } catch(e){
+      console.error('Camera start failed', e);
+      let msg = 'Could not start the camera.';
+      if(e && e.name === 'NotAllowedError') msg = 'Camera permission was denied. Check your browser/site settings and try again.';
+      else if(e && e.name === 'NotFoundError') msg = 'No camera was found on this device.';
+      else if(e && e.name === 'NotReadableError') msg = 'Camera is already in use by another app.';
+      statusEl.textContent = msg + ' You can also use manual entry below.';
+      stopScanning();
     }
-    scanRAF = requestAnimationFrame(tick);
   }
 
   function stopScanning(){
@@ -688,7 +733,10 @@
       scanStream = null;
     }
     scanToggleBtn.textContent = 'Start camera';
-    document.getElementById('scanStatus').textContent = 'Camera is off.';
+    const statusEl = document.getElementById('scanStatus');
+    if(statusEl.textContent.indexOf('Checked in') === -1 && statusEl.textContent.indexOf('Already checked in') === -1){
+      statusEl.textContent = 'Camera is off.';
+    }
   }
 
   async function handleScanResult(code){
@@ -719,6 +767,7 @@
       try{ await saveState(); } catch(e){ /* show result anyway */ }
     }
 
+    document.getElementById('manualCodeInput').value = '';
     renderTicket(guest, 'scanResultWrap', true);
     statusEl.textContent = wasCheckedIn
       ? 'Already checked in earlier — seat shown above.'
